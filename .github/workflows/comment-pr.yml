@@ -1,21 +1,28 @@
 name: Comment PR
 
+#####
+# This workflow is triggered by pull_request_target event.
+# Never checkout the PR and run ANY local code on it.
+#####
+
 on:
   pull_request_target:
 
-permissions:
-  pull-requests: write
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   comment-pr:
     runs-on: ubuntu-latest
     name: Comment PR
+    permissions:
+      pull-requests: write # Post the onboarding comment.
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Comment PR
-        uses: thollander/actions-comment-pull-request@v2
+        uses: thollander/actions-comment-pull-request@24bffb9b452ba05a4f3f77933840a6a841d1b32b # v3.0.1
         with:
           message: |
             Thank you for making this pull request.
@@ -26,5 +33,5 @@ jobs:
             ```
             HATCH_BUILD_HOOKS_ENABLE=true pip install git+${{ github.event.pull_request.head.repo.clone_url }}@${{ github.event.pull_request.head.ref }}
             ```
-            (this requires `nodejs`, see more at [Developing Jupytext](https://jupytext.readthedocs.io/en/latest/developing.html))
-          comment_tag: binder_link
+            (this requires `nodejs`, see more at [Developing Jupytext](https://jupytext.org/reference/developing/))
+          comment-tag: binder_link

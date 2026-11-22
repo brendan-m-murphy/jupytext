@@ -304,10 +304,17 @@ def is_active(ext, metadata, default=True):
     return ext.replace(".", "") in re.split(r"\.|,", metadata["active"])
 
 
-def metadata_to_double_percent_options(metadata, plain_json):
+def is_valid_cell_id(cell_id):
+    """Whether a value can be used as a Jupyter cell ID."""
+    return isinstance(cell_id, str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", cell_id) is not None
+
+
+def metadata_to_double_percent_options(metadata, plain_json, cell_id=None):
     """Metadata to double percent lines"""
     text = []
-    if "title" in metadata:
+    if cell_id:
+        text.append(cell_id)
+    elif cell_id is None and isinstance(metadata.get("title"), str):
         text.append(metadata.pop("title"))
     if "cell_depth" in metadata:
         text.insert(0, "%" * metadata.pop("cell_depth"))
@@ -350,10 +357,9 @@ def parse_key_equal_value(text):
     # Just an identifier?
     if not text.startswith("--") and is_identifier(text[last_space_pos + 1 :]):
         key = text[last_space_pos + 1 :]
-        value = None
-        result = {key: value}
-        if last_space_pos > 0:
-            result.update(parse_key_equal_value(text[:last_space_pos]))
+        result = parse_key_equal_value(text[:last_space_pos]) if last_space_pos > 0 else {}
+        # A bare key must not overwrite a value parsed on its left.
+        result.setdefault(key, None)
         return result
 
     # Iterate on the '=' signs, starting from the right

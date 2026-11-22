@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from jupyter_client.kernelspec import find_kernel_specs, get_kernel_spec
+from jupyter_core.paths import jupyter_data_dir
 import nbformat
 from nbformat import reads as nb_reads, validate
 from nbformat.v4 import nbbase
@@ -17,10 +18,13 @@ from nbformat.v4.nbbase import (
     new_notebook,
     new_output,
 )
+from nbformat.sign import NotebookNotary
+
 
 import jupytext
 from jupytext.cell_reader import rst2md
 from jupytext.cli import system, tool_version
+from jupytext.compare import NotebookDifference
 from jupytext.formats import formats_with_support_for_cell_metadata
 from jupytext.myst import is_myst_available
 from jupytext.pandoc import is_pandoc_available
@@ -48,12 +52,47 @@ def force_validate_nbformat(monkeypatch):
     monkeypatch.setattr(nbformat, "reads", nbformat_reads)
 
 
+@pytest.fixture
+def fresh_notary():
+    notary = NotebookNotary(
+        db_file=":memory:",
+        secret=b"test-secret",
+    )
+    yield notary
+    # Close the SQLite database connection to avoid ResourceWarnings on Python 3.13+
+    notary.store.close()
+
+
+@pytest.fixture(autouse=True)
+def isolated_notebook_trust(monkeypatch, tmp_path, fresh_notary):
+    """Keep notebook trust local to each test, including CLI subprocesses."""
+    # Keep user-installed kernels visible in subprocesses, including pre-commit
+    # virtualenvs, while redirecting writable trust data to the test directory.
+    monkeypatch.setenv("JUPYTER_PATH", jupyter_data_dir(), prepend=os.pathsep)
+    monkeypatch.setenv("JUPYTER_DATA_DIR", str(tmp_path / "jupyter"))
+    # Change the default on the function itself so existing imported aliases also
+    # use this test's notary. Explicit notary arguments still take precedence,
+    # and the CLI leaves closing the injected notary to fresh_notary's teardown.
+    monkeypatch.setattr(jupytext.cli.jupytext, "__kwdefaults__", {"notary": fresh_notary})
+
+
 @pytest.fixture(params=["sync", "async"])
-def cm(request):
+def cm(request, fresh_notary):
     if request.param == "sync":
-        return jupytext.TextFileContentsManager()
+        cm = jupytext.TextFileContentsManager()
     else:
-        return jupytext.AsyncTextFileContentsManager()
+        cm = jupytext.AsyncTextFileContentsManager()
+
+    # We use a fresh notary for each test,
+    # to make sure that the trust status of
+    # notebooks is not shared between tests
+    cm.notary = fresh_notary
+
+    yield cm
+    # Clean up any resources in the contents manager
+    with contextlib.suppress(Exception):
+        if hasattr(cm, "close"):
+            cm.close()
 
 
 @pytest.fixture
@@ -370,6 +409,46 @@ def ipynb_to_quarto(request):
     return request.param
 
 
+org_markdown_cell_id_xfail = pytest.mark.xfail(
+    reason="Pandoc converts Markdown cell IDs to Org targets and reads them back as HTML spans",
+    raises=NotebookDifference,
+    strict=True,
+)
+
+
+@pytest.fixture(
+    params=[
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_R" / "ir_notebook.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_bash" / "sample_bash_notebook.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_groovy" / "tailrecursive-factorial.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_js" / "ijavascript.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_m" / "octave_notebook.ipynb"),
+        pytest.param(str(SAMPLE_NOTEBOOK_PATH / "ipynb_maxima" / "maxima_example.ipynb"), marks=org_markdown_cell_id_xfail),
+        pytest.param(str(SAMPLE_NOTEBOOK_PATH / "ipynb_ocaml" / "ocaml_notebook.ipynb"), marks=org_markdown_cell_id_xfail),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_py" / "Notebook with html and latex cells.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_py" / "Notebook_with_R_magic.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_py" / "Notebook_with_more_R_magic_111.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_py" / "cat_variable.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_py" / "convert_to_py_then_test_with_update83.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_py" / "jupyter.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_py" / "jupyter_again.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_py" / "notebook_with_complex_metadata.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_q" / "kalman_filter_and_visualization.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_robot" / "simple_robot_notebook.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_sage" / "sage_print_hello.ipynb"),
+        pytest.param(str(SAMPLE_NOTEBOOK_PATH / "ipynb_sas" / "sas.ipynb"), marks=org_markdown_cell_id_xfail),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_scala" / "simple_scala_notebook.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_stata" / "stata_notebook.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_tcl" / "tcl_test.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_ts" / "itypescript.ipynb"),
+        str(SAMPLE_NOTEBOOK_PATH / "ipynb_xonsh" / "xonsh_example.ipynb"),
+    ],
+    ids=notebook_id_func,
+)
+def ipynb_to_org(request):
+    return request.param
+
+
 @pytest.fixture(
     params=list_notebooks("ipynb_py", skip="(raw|hash|frozen|magic|html|164|long)"),
     ids=notebook_id_func,
@@ -409,8 +488,9 @@ def pytest_runtest_setup(item):
             # https://github.com/mwouts/jupytext/commit/c07d919702999056ce47f92b74f63a15c8361c5d
             # The mirror files changed again when Pandoc 2.16 was introduced
             # https://github.com/mwouts/jupytext/pull/919/commits/1fa1451ecdaa6ad8d803bcb6fb0c0cf09e5371bf
-            if not is_pandoc_available(min_version="3.0"):
-                pytest.skip("pandoc>=3.0 is not available")
+            min_version = mark.kwargs.get("min_version", "3.0")
+            if not is_pandoc_available(min_version=min_version):
+                pytest.skip(f"pandoc>={min_version} is not available")
         if mark.name == "requires_quarto":
             if not is_quarto_available(min_version="0.2.0"):
                 pytest.skip("quarto>=0.2 is not available")

@@ -16,7 +16,6 @@ from traitlets import Bool, Dict, Enum, Float, List, Unicode, Union
 from traitlets.config import Configurable
 from traitlets.config.loader import PyFileConfigLoader
 from traitlets.traitlets import TraitError
-import typing
 from .formats import (
     NOTEBOOK_EXTENSIONS,
     get_formats_from_notebook_metadata,
@@ -112,6 +111,12 @@ class JupytextConfiguration(Configurable):
 
     default_cell_metadata_filter = Unicode("", help="Deprecated. Use 'cell_metadata_filter' instead", config=True)
 
+    cell_id_to_title = Bool(
+        False,
+        help="Store cell IDs in the cell marker titles of light, percent and hydrogen scripts",
+        config=True,
+    )
+
     comment_magics = Enum(
         values=[True, False],
         allow_none=True,
@@ -133,7 +138,7 @@ class JupytextConfiguration(Configurable):
 
     doxygen_equation_markers = Bool(
         False,
-        help="Should equation markers use the DOxygen format? (see https://github.com/mwouts/jupytext/issues/517)",
+        help="Should equation markers use the DOxygen format? (see https://github.com/jupytext/jupytext/issues/517)",
         config=True,
     )
 
@@ -170,6 +175,14 @@ class JupytextConfiguration(Configurable):
         help='A comma separated list of cell magics. Use e.g. custom_cell_magics = "configure,local" '
         'if you want code cells starting with the Spark magic cell commands "configure" and "local" '
         "to be commented out when converted to scripts.",
+        config=True,
+    )
+
+    custom_language_magics = Unicode(
+        help="A comma separated list of additional language magics. Use e.g. "
+        'custom_language_magics = "jsx,tsx" if you have custom magics for those languages '
+        "and want Markdown code blocks in those languages to be converted to code cells "
+        "with the appropriate cell magic.",
         config=True,
     )
 
@@ -216,6 +229,8 @@ class JupytextConfiguration(Configurable):
             format_options.setdefault("rst2md", self.sphinx_convert_rst2md)
         if self.custom_cell_magics:
             format_options.setdefault("custom_cell_magics", self.custom_cell_magics)
+        if self.custom_language_magics:
+            format_options.setdefault("custom_language_magics", self.custom_language_magics)
 
     def default_formats(self, path):
         """Return the default formats, if they apply to the current path #157"""
@@ -308,7 +323,7 @@ def find_global_jupytext_configuration_file():
     return None
 
 
-def find_jupytext_configuration_file(path: typing.Union[str, Path], search_parent_dirs=True) -> str:
+def find_jupytext_configuration_file(path: str | Path, search_parent_dirs=True) -> str:
     """Return the first jupytext configuration file in the current directory, or any parent directory"""
 
     path = Path(path).absolute()
@@ -321,7 +336,7 @@ def find_jupytext_configuration_file(path: typing.Union[str, Path], search_paren
 
     pyproject_path = path / PYPROJECT_FILE
     if pyproject_path.is_file():
-        with pyproject_path.open() as stream:
+        with pyproject_path.open(encoding="utf-8") as stream:
             doc = tomllib.loads(stream.read())
             if doc.get("tool", {}).get("jupytext") is not None:
                 return str(pyproject_path)

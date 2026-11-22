@@ -1,6 +1,239 @@
 Jupytext ChangeLog
 ==================
 
+1.20.1.dev0 (unreleased)
+-----------------------
+
+See [changelog fragments](changelog.d/) for additional unreleased changes.
+
+
+1.20.0 (2026-01-18, yanked)
+---------------------------
+
+The [1.20.0 files on PyPI](https://pypi.org/project/jupytext/1.20.0/) were yanked because they were
+Jupytext 1.19.0 builds uploaded under the wrong version number. The 1.20 series starts at 1.20.1.
+
+
+1.19.7 (2026-11-21)
+-------------------
+
+**Added**
+- Use `--show-output` with `--execute` to see cell stdout and stderr as the notebook runs. Live output goes to
+  stderr so stdout remains available for notebook output, and cell outputs are still saved in the notebook.
+  Thanks to [Helge Gehring](https://github.com/HelgeGehring) for the request and
+  [Joshua Bronson](https://github.com/ctcjab) for implementing it
+  ([#1277](https://github.com/jupytext/jupytext/issues/1277), [#1662](https://github.com/jupytext/jupytext/pull/1662)).
+
+**Fixed**
+- Syncing or updating a paired notebook preserves the metadata of a raw cell created from YAML front matter,
+  including tags, MIME type, and slideshow settings. Metadata edits in explicitly fenced MyST raw cells are
+  carried over from the text file. Thanks to [Thomas Thomsen](https://github.com/sronix) for reporting the original
+  metadata loss and [Eliot5566](https://github.com/Eliot5566) for the front-matter fix
+  ([#1687](https://github.com/jupytext/jupytext/issues/1687), [#1688](https://github.com/jupytext/jupytext/pull/1688),
+  [#1702](https://github.com/jupytext/jupytext/pull/1702)).
+- When adding a final newline would be the only change to a Python source, `jupytext --sync` leaves the script
+  as saved, preventing a cursor jump in VS Code. Thanks to [@sysy007uuu](https://github.com/sysy007uuu) for
+  reporting the issue and [Victor Negîrneac](https://github.com/caenrigen) for tracing it to Jupytext
+  ([Jupytext Sync #42](https://github.com/caenrigen/vscode-jupytext-sync/issues/42),
+  [#1705](https://github.com/jupytext/jupytext/pull/1705)).
+- MyST round trips preserve syntax highlighting for cells that use recognized IPython language magics. Other
+  magics such as `%%script` and `%%spark` keep the notebook lexer. Thanks to [Ilya Khalafi](https://github.com/IlyaKhalafi)
+  for the PR ([#1396](https://github.com/jupytext/jupytext/issues/1396), [#1680](https://github.com/jupytext/jupytext/pull/1680)).
+- Light scripts with default cell markers round-trip magics in cells written in another language, such as
+  `%%bash` in a Python notebook. Thanks to [Surya S](https://github.com/imsurya26) for the PR
+  ([#1697](https://github.com/jupytext/jupytext/pull/1697)).
+- Empty Markdown lines no longer start block comments in q scripts. Cell boundaries and trailing blank lines
+  are preserved in light, percent, and hydrogen formats. Thanks to [Ben Lubas](https://github.com/benlubas)
+  for reporting and fixing this ([#1630](https://github.com/jupytext/jupytext/issues/1630),
+  [#1636](https://github.com/jupytext/jupytext/pull/1636)).
+- Markdown round trips preserve the order of bare cell metadata attributes. Thanks to
+  [Langning Zhang](https://github.com/Boulea7) for the PR ([#1665](https://github.com/jupytext/jupytext/pull/1665)).
+- Configuration discovery reads `pyproject.toml` as UTF-8 on systems with non-UTF-8 locales. Thanks to
+  [Davis Rens](https://github.com/davrens101) for the PR ([#1686](https://github.com/jupytext/jupytext/pull/1686)).
+- Conversions to and from `py:marimo` now use UTF-8 for temporary files, fixing errors and corrupted non-ASCII text
+  on Windows with a non-UTF-8 locale. Thanks to [Hyungjoo Jeon](https://github.com/Alpenj) for the PR
+  ([#1679](https://github.com/jupytext/jupytext/pull/1679)).
+- Building Jupytext from a source distribution no longer fails when the generated README is missing. Thanks to
+  [Nico Della Torre](https://github.com/nicozdeb) for the PR ([#1671](https://github.com/jupytext/jupytext/pull/1671)).
+- The Jupyter server extension now uses `inspect.iscoroutinefunction`, avoiding a deprecation warning on Python 3.14
+  and preparing for the removal of `asyncio.iscoroutinefunction` in Python 3.16. Thanks to
+  [mao](https://github.com/maoxor) for this fix ([#1674](https://github.com/jupytext/jupytext/pull/1674)).
+- Fixed documentation links in the README. Thanks to [thjbdvlt](https://github.com/thjbdvlt) for this contribution
+  ([#1657](https://github.com/jupytext/jupytext/pull/1657)).
+- Fixed Pixi dependency resolution and notebook test kernel registration in CI, and aligned the development container's
+  Pixi version with CI ([#1682](https://github.com/jupytext/jupytext/pull/1682)).
+
+**Changed**
+- Script parsing skips quote scanning on lines that cannot change the parser's state. Thanks to
+  [mscavnicky](https://github.com/mscavnicky) for the PR ([#1676](https://github.com/jupytext/jupytext/pull/1676)).
+- Regenerated the Marimo notebook examples with Marimo 0.25.2 ([#1486](https://github.com/jupytext/jupytext/pull/1486)).
+- CI now tests loading paired and standalone notebooks through Jupyter Collaboration. Thanks to
+  [Rayan Salhab](https://github.com/cyphercodes) for the original tests ([#1552](https://github.com/jupytext/jupytext/pull/1552),
+  [#1699](https://github.com/jupytext/jupytext/pull/1699)).
+- CI tests with newer Pandoc releases. Pixi resolves Quarto separately because its Conda package pins Pandoc
+  ([#1700](https://github.com/jupytext/jupytext/pull/1700)).
+- CLI tests use isolated notebook trust databases to prevent lock errors during parallel runs
+  ([#1693](https://github.com/jupytext/jupytext/pull/1693)).
+- CI now runs for GitHub merge queue groups. Contributors can supply optional changelog fragments to be collected
+  at release time ([#1691](https://github.com/jupytext/jupytext/pull/1691), [#1692](https://github.com/jupytext/jupytext/pull/1692)).
+- CI jobs now run in parallel after successful `zizmor` and `pre-commit` checks, and Pixi dependency updates are limited
+  to the tested platform with serial solves ([#1682](https://github.com/jupytext/jupytext/pull/1682)).
+- Updated the JupyterLab extension and documentation website dependencies, including Astro, Starlight, and Sharp
+  ([#1659](https://github.com/jupytext/jupytext/pull/1659), [#1666](https://github.com/jupytext/jupytext/pull/1666),
+  [#1669](https://github.com/jupytext/jupytext/pull/1669), [#1682](https://github.com/jupytext/jupytext/pull/1682),
+  [#1696](https://github.com/jupytext/jupytext/pull/1696)).
+- Updated the GitHub Actions used for CI and publishing
+  ([#1658](https://github.com/jupytext/jupytext/pull/1658), [#1667](https://github.com/jupytext/jupytext/pull/1667),
+  [#1668](https://github.com/jupytext/jupytext/pull/1668), [#1678](https://github.com/jupytext/jupytext/pull/1678)).
+
+**Security**
+- We have merged Dependabot security updates for the JupyterLab extension and the documentation website
+  ([#1661](https://github.com/jupytext/jupytext/pull/1661), [#1663](https://github.com/jupytext/jupytext/pull/1663),
+  [#1670](https://github.com/jupytext/jupytext/pull/1670), [#1685](https://github.com/jupytext/jupytext/pull/1685),
+  [#1689](https://github.com/jupytext/jupytext/pull/1689)).
+
+**Known issues**
+- With Jupyter Collaboration, saving one member of an open pair can discard unsaved edits in the other. Open only
+  the paired text file as a notebook. Jupytext still saves outputs to the `.ipynb` file. Thanks to
+  [Guillaume Therin](https://github.com/gtherin) for reporting this
+  ([#1648](https://github.com/jupytext/jupytext/issues/1648)).
+- Pandoc 3.10 can truncate the Jupytext format version in Markdown metadata and prevent paired notebooks from
+  reopening. Upgrade to Pandoc 3.10.1 or later ([#1545](https://github.com/jupytext/jupytext/issues/1545)).
+
+
+1.19.6 (2026-10-04)
+-------------------
+
+**Security**
+- The Quarto conversions now run in a private temporary directory, so that the output file that `quarto convert` names after its input can no longer be pre-created as a symlink by another user of the machine. Thanks to [Naveed](https://github.com/nvxbug) for the PR ([#1615](https://github.com/jupytext/jupytext/pull/1615)).
+- Paired paths from notebook `formats` metadata are now prevented from escaping the working tree, including when an absolute notebook path is used. Thanks to [Naveed](https://github.com/nvxbug) for addressing the issue ([#1588](https://github.com/jupytext/jupytext/pull/1588)).
+- The CLI now ignores `trusted` cell metadata when the notebook signature is invalid, so a `trusted=true` option in a
+  paired text file cannot make untrusted notebook outputs trusted during `--sync`. Thanks to
+  [Naveed](https://github.com/nvxbug) for the fix ([#1617](https://github.com/jupytext/jupytext/pull/1617)).
+- Custom `cell_markers` and `endofcell` values in the light format are now matched literally, preventing regular-expression
+  injection, parsing errors, and excessive processing time on crafted notebooks. This also fixes writing OCaml notebooks
+  with custom cell markers. Thanks to [Naveed](https://github.com/nvxbug) again for the PR
+  ([#1618](https://github.com/jupytext/jupytext/pull/1618)).
+- We have merged Dependabot security updates for the JupyterLab extension and the documentation website
+  ([#1614](https://github.com/jupytext/jupytext/pull/1614), [#1620](https://github.com/jupytext/jupytext/pull/1620),
+  [#1622](https://github.com/jupytext/jupytext/pull/1622), [#1624](https://github.com/jupytext/jupytext/pull/1624),
+  [#1634](https://github.com/jupytext/jupytext/pull/1634), [#1639](https://github.com/jupytext/jupytext/pull/1639),
+  [#1642](https://github.com/jupytext/jupytext/pull/1642), [#1643](https://github.com/jupytext/jupytext/pull/1643),
+  [#1647](https://github.com/jupytext/jupytext/pull/1647), [#1653](https://github.com/jupytext/jupytext/pull/1653),
+  [#1654](https://github.com/jupytext/jupytext/pull/1654)).
+
+**Fixed**
+- Menu entries such as "Rename Notebook…" name the file type again, instead of saying "default". Thanks to
+  [Michał Krassowski](https://github.com/krassowski) for this PR ([#1632](https://github.com/jupytext/jupytext/pull/1632)).
+- Mermaid `%%` comments inside a markdown cell are no longer mistaken for `py:percent` cell markers ([#1533](https://github.com/mwouts/jupytext/issues/1533)).  Thanks to [Sanjay Santhanam](https://github.com/Sanjays2402) for his PR ([#1609](https://github.com/jupytext/jupytext/pull/1609))
+- A whitespace-only final line in a percent-format cell is now preserved when reading and round-tripping the notebook
+  ([#1599](https://github.com/jupytext/jupytext/issues/1599)). Thanks to [lowbyteguy](https://github.com/lowbyteguy)
+  for the PR ([#1610](https://github.com/jupytext/jupytext/pull/1610)).
+- The JupyterLab extension's development install script now uses the correct `jupyter-builder` import
+  ([#1632](https://github.com/jupytext/jupytext/pull/1632)). Thanks again to [Michał Krassowski](https://github.com/krassowski)
+  for this fix.
+- Fixed JupyterLab extension build issues related to Yarn package checksums. Thanks to
+  [Mahendra Paipuri](https://github.com/mahendrapaipuri) for his contributions to
+  [#1614](https://github.com/jupytext/jupytext/pull/1614), [#1620](https://github.com/jupytext/jupytext/pull/1620),
+  and [#1621](https://github.com/jupytext/jupytext/pull/1621).
+- Fixed pairing on Windows when a prefix root contains subdirectories, such as `notebooks/tutorials///ipynb`.
+
+**Changed**
+- Updated the JupyterLab extension's production dependencies
+  ([#1621](https://github.com/jupytext/jupytext/pull/1621), [#1641](https://github.com/jupytext/jupytext/pull/1641),
+  [#1652](https://github.com/jupytext/jupytext/pull/1652)).
+- Updated the documentation website's Astro, Starlight, and Sharp dependencies
+  ([#1612](https://github.com/jupytext/jupytext/pull/1612), [#1621](https://github.com/jupytext/jupytext/pull/1621),
+  [#1625](https://github.com/jupytext/jupytext/pull/1625), [#1641](https://github.com/jupytext/jupytext/pull/1641),
+  [#1646](https://github.com/jupytext/jupytext/pull/1646), [#1650](https://github.com/jupytext/jupytext/pull/1650),
+  [#1652](https://github.com/jupytext/jupytext/pull/1652)).
+- Updated the GitHub Actions used for CI and publishing
+  ([#1613](https://github.com/jupytext/jupytext/pull/1613), [#1619](https://github.com/jupytext/jupytext/pull/1619),
+  [#1633](https://github.com/jupytext/jupytext/pull/1633), [#1640](https://github.com/jupytext/jupytext/pull/1640),
+  [#1649](https://github.com/jupytext/jupytext/pull/1649), [#1651](https://github.com/jupytext/jupytext/pull/1651)).
+- Updated Jupyter Server in the Pixi environments. Thanks again to
+  [Mahendra Paipuri](https://github.com/mahendrapaipuri) for this update
+  ([#1646](https://github.com/jupytext/jupytext/pull/1646)).
+
+**Added**
+- We have added a development container that can be opened with VS Code’s Dev Containers extension
+  ([#1655](https://github.com/jupytext/jupytext/pull/1655)).
+- Added support for the Jenner language. Thanks to [Lawrence Sinclair](https://github.com/lwsinclair) for this contribution ([#1493](https://github.com/mwouts/jupytext/pull/1493)).
+
+
+1.19.5 (2026-07-21)
+-------------------
+
+**Changed**
+- Harden the github action ([#1569](https://github.com/jupytext/jupytext/pull/1569)). Thanks to [Peyton Murray](https://github.com/peytondmurray) for this PR
+- The JupyterLab extension is now built with `jupyter-builder` - Thanks to [Mahendra Paipuri](https://github.com/mahendrapaipuri) for this PR ([#1590](https://github.com/jupytext/jupytext/pull/1590))
+- `zizmor` and `pre-commit` are now required to pass before any other CI job runs, and the extension lint is now part of `pre-commit` ([#1594](https://github.com/jupytext/jupytext/pull/1594))
+- Enabled TypeScript strict null checks in the JupyterLab extension - Thanks to [Michał Krassowski](https://github.com/krassowski) for this PR ([#1586](https://github.com/jupytext/jupytext/pull/1586))
+
+**Fixed**
+- Detecting IPython help/shell commands no longer takes quadratic time on lines made of whitespace - Thanks to [Naveed](https://github.com/nvxbug) for this PR ([#1582](https://github.com/jupytext/jupytext/pull/1582))
+- Fixed unguarded access to the `languageInfo.extensions` array, which could still make Jupytext show notebook icons for Python files when the kernel metadata was incomplete - Thanks to [Michał Krassowski](https://github.com/krassowski) for this PR ([#1584](https://github.com/jupytext/jupytext/pull/1584))
+
+**Security**
+- `marimo_py_to_notebook` now reuses its secure (0600, `mkstemp`-backed) temporary files instead of closing and reopening them by name, which removed the safe permissions and left a window for a symlink attack on shared machines ([#1568](https://github.com/jupytext/jupytext/pull/1568)). Thanks to [Naveed](https://github.com/nvxbug) for reporting and fixing this!
+
+1.19.4 (2026-06-21)
+-------------------
+
+**Changed**
+- Jupytext's documentation is now at https://jupytext.org! ([#1538](https://github.com/jupytext/jupytext/pull/1538))
+- We have moved Jupytext to its own Jupytext organization ([#1546](https://github.com/jupytext/jupytext/issues/1546))
+- Updated the JupyterLab extension production dependencies (12 patch updates) ([#1541](https://github.com/jupytext/jupytext/pull/1541))
+- We require `pandoc<3.10` on the CI as pandoc converts the "3.10" string to a float, which then causes issues in Jupytext ([#1545](https://github.com/jupytext/jupytext/issues/1545))
+- Fixed the CI so that tests also run on scheduled runs, and so that `jupyterfs` tests are skipped when their initialization fails ([#1539](https://github.com/jupytext/jupytext/pull/1539))
+- In the CI, the extension is build using a dedicated `build` pixi environment.
+
+**Fixed**
+- We now support unicode characters while dumping YAML ([#1542](https://github.com/jupytext/jupytext/pull/1542))
+
+**Added**
+- A new `custom_language_magics` option is available ([#1491](https://github.com/jupytext/jupytext/issues/1491)). Thanks to [steovd](https://github.com/steovd) for making the PR!
+
+**Security**
+- Fixed [GHSA-m22c-4q2m-m5wr](https://github.com/jupytext/jupytext/security/advisories/GHSA-m22c-4q2m-m5wr): the `update-playwright-snapshots` workflow was
+  triggerable by any user via an `issue_comment` event. It now checks that the
+  comment author is an OWNER, MEMBER, or COLLABORATOR before running
+  ([#1535](https://github.com/jupytext/jupytext/pull/1535))
+- Set `persist-credentials: false` on all workflow checkout steps as
+  defense-in-depth, preventing a live `GITHUB_TOKEN` from being left in
+  `.git/config` where attacker-controlled build hooks could read it. This is
+  strictly required only for `update-playwright-snapshots` (fixed above), but
+  applies to all workflows so they remain safe if their scope is later extended.
+
+1.19.3 (2026-05-17)
+-------------------
+
+**Fixed**
+- The Jupytext CLI issues a warning when a notebook is not trusted. Also, trust is preserved when empty outputs are added (follow-up on [#1505](https://github.com/mwouts/jupytext/issues/1505))
+
+**Changed**
+- The dependabot config has been updated to correctly bump extension packages, now allowing only production updates and ignoring dev dependencies ([#1532](https://github.com/mwouts/jupytext/pull/1532)). Thanks to [Mahendra Paipuri](https://github.com/mahendrapaipuri) for this PR!
+- Removed deprecated stylelint packages (`stylelint-config-prettier` and `stylelint-prettier`) from the JupyterLab extension dependencies ([#1530](https://github.com/mwouts/jupytext/pull/1530))
+- We have removed Python 3.9 testing from the CI (Python 3.9 reached EOL in October 2025)
+
+
+1.19.2 (2026-05-10)
+-------------------
+
+**Fixed**
+- Trusted notebooks remain trusted after `jupytext --sync` ([#1505](https://github.com/mwouts/jupytext/issues/1505))
+- We have fixed the homepage link in `package.json`. Thanks to [Michał Krassowski](https://github.com/krassowski) for making this PR ([#1494](https://github.com/mwouts/jupytext/pull/1494))
+- Thanks to [Brigitta Sipőcz](https://github.com/bsipocz) for fixing a broken link in our CLI ([#1428](https://github.com/mwouts/jupytext/pull/1428))
+- The `--quiet` flag now suppresses the `creating missing directory` warning when writing to a path that includes a prefix ([#1533](https://github.com/mwouts/jupytext/pull/1533))
+
+
+**Changed**
+- The CI workflow has been restructured to maximize parallelization. All test suites (pip, conda, UI) and the build step now run concurrently after pre-commit checks, instead of sequentially, reducing CI times ([#1527](https://github.com/mwouts/jupytext/pull/1527))
+- We have skipped the tests that involve `jupyterfs` on Python 3.12+ as they started failing on the CI with no obvious way to fix them ([#1509](https://github.com/mwouts/jupytext/issues/1509))
+- We have changed the configuration of Dependabot to get grouped dependency updates for our JupyterLab extension.
+- We have merged a series of Dependabot security updates: [#1516](https://github.com/mwouts/jupytext/pull/1516), [#1517](https://github.com/mwouts/jupytext/pull/1517), [#1519](https://github.com/mwouts/jupytext/pull/1519), [#1520](https://github.com/mwouts/jupytext/pull/1520), [#1522](https://github.com/mwouts/jupytext/pull/1522), [#1524](https://github.com/mwouts/jupytext/pull/1524)
+
+
 1.19.1 (2026-01-25)
 -------------------
 
@@ -434,7 +667,7 @@ a configuration file ([#967](https://github.com/mwouts/jupytext/issues/967))
 **Changed**
 - The extension for JupyterLab benefited from a series of improvements contributed by [Frédéric Collonval](https://github.com/fcollonval):
   - A new "Jupytext Notebook" factory offers the option to open text notebooks directly with the notebook view ([#803](https://github.com/mwouts/jupytext/issues/803)). To use it, follow the instructions in the [documentation](https://github.com/mwouts/jupytext/blob/main/docs/index.md#Install).
-  - The ICommandPalette is optional, for compatibility with RISE within JupyterLab [RISE[#605](https://github.com/mwouts/jupytext/issues/605)](https://github.com/damianavila/RISE/pull/605)
+  - The ICommandPalette is optional, for compatibility with RISE within JupyterLab [RISE #605](https://github.com/damianavila/RISE/pull/605)
   - Added support for translation
 - Branch `master` was renamed to `main` (links in the documentation were updated)
 

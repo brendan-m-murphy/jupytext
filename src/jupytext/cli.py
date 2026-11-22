@@ -11,7 +11,8 @@ import sys
 import warnings
 from copy import copy
 from tempfile import NamedTemporaryFile
-from typing import Optional
+
+from nbformat.sign import NotebookNotary
 
 from .combine import combine_inputs_with_outputs
 from .compare import NotebookDifference, compare, test_round_trip_conversion
@@ -121,7 +122,7 @@ def parse_jupytext_args(args=None):
             "notebooks and text documents in a roundtrip. Use the "
             "--test and and --test-strict commands to test the roundtrip on your files. "
             "Read more about the available formats at "
-            "https://jupytext.readthedocs.io/en/latest/formats.html. "
+            "https://jupytext.org/formats/scripts/ "
             "NB: in addition to the extensions listed above, you can also use these: '{}'".format(
                 "', '".join(
                     sorted(
@@ -297,6 +298,13 @@ def parse_jupytext_args(args=None):
         type=str,
         help="Execute the notebook at the given path (defaults to the notebook parent directory)",
     )
+    parser.add_argument(
+        "--show-output",
+        action="store_true",
+        help="When executing the notebook with --execute, print the stdout and stderr "
+        "output of each cell to stderr as the cell runs (the outputs are still saved "
+        "in the notebook).",
+    )
 
     parser.add_argument(
         "--quiet",
@@ -339,7 +347,7 @@ def parse_jupytext_args(args=None):
     return parser.parse_args(args)
 
 
-def jupytext(args=None):
+def jupytext(args=None, *, notary=None):
     """Entry point for the jupytext script"""
     args = parse_jupytext_args(args)
 
@@ -355,7 +363,7 @@ def jupytext(args=None):
         warnings.warn(
             "The --pre-commit argument is deprecated. "
             "Please consider switching to the pre-commit.com framework "
-            "(let us know at https://github.com/mwouts/jupytext/issues "
+            "(let us know at https://github.com/jupytext/jupytext/issues "
             "if that is an issue for you)",
             DeprecationWarning,
         )
@@ -384,6 +392,9 @@ def jupytext(args=None):
 
     if args.run_path:
         args.execute = True
+
+    if args.show_output and not args.execute:
+        raise ValueError("--show-output can only be used together with --execute")
 
     if (args.test or args.test_strict) and not args.output_format and not args.output and not args.sync:
         raise ValueError("Please provide one of --to, --output or --sync")
@@ -487,19 +498,50 @@ def jupytext(args=None):
 
     # Count how many files have round-trip issues when testing
     exit_code = 0
-    for nb_file in notebooks:
-        if not args.warn_only:
-            exit_code += jupytext_single_file(nb_file, args, log)
-        else:
-            try:
-                exit_code += jupytext_single_file(nb_file, args, log)
-            except Exception as err:
-                sys.stderr.write(f"[jupytext] Error: {str(err)}\n")
 
-    return exit_code
+    notary_to_close = None
+    if notary is None:
+        notary = notary_to_close = NotebookNotary()
+
+    try:
+        for nb_file in notebooks:
+            if not args.warn_only:
+                exit_code += jupytext_single_file(nb_file, args, log, notary=notary)
+            else:
+                try:
+                    exit_code += jupytext_single_file(nb_file, args, log, notary=notary)
+                except Exception as err:
+                    sys.stderr.write(f"[jupytext] Error: {str(err)}\n")
+
+        return exit_code
+    finally:
+        if notary_to_close:
+            notary_to_close.store.close()
 
 
-def jupytext_single_file(nb_file, args, log):
+def execute_preprocessor(show_output=False, **kwargs):
+    """Return a nbconvert ExecutePreprocessor. With show_output=True, the stream outputs
+    of each cell are echoed to stderr as they arrive, so that they never mix with a
+    notebook written to stdout"""
+    from nbconvert.preprocessors import ExecutePreprocessor
+
+    if not show_output:
+        return ExecutePreprocessor(**kwargs)
+
+    class ShowOutputExecutePreprocessor(ExecutePreprocessor):
+        def output(self, outs, msg, display_id, cell_index):
+            out = super().output(outs, msg, display_id, cell_index)
+            if out is not None and out.get("output_type") == "stream":
+                # Keep the [jupytext] messages on stdout in order with the cell outputs
+                sys.stdout.flush()
+                sys.stderr.write(out.get("text", ""))
+                sys.stderr.flush()
+            return out
+
+    return ShowOutputExecutePreprocessor(**kwargs)
+
+
+def jupytext_single_file(nb_file, args, log, notary):
     """Apply the jupytext command, with given arguments, to a single file"""
     if nb_file == "-" and args.sync:
         msg = "Missing notebook path."
@@ -530,6 +572,26 @@ def jupytext_single_file(nb_file, args, log):
 
     config = load_jupytext_config(os.path.abspath(nb_file))
 
+    def _read(path, fmt=None):
+        """Read a notebook; mark the cells trusted when the signature is valid, and drop
+        the trust claims that the file makes about itself when it is not."""
+        nb = read(path, fmt=fmt, config=config)
+        if notary.check_signature(nb):
+            notary.mark_cells(nb, True)
+        else:
+            for cell in nb.cells:
+                cell.metadata.pop("trusted", None)
+        return nb
+
+    def _writes(nb, fmt):
+        """Serialize a notebook; sign the result when every cell is trusted."""
+        content = writes(nb, fmt=fmt, config=config)
+        if notary.check_cells(nb):
+            notary.sign(reads(content, fmt=fmt, config=config))
+        else:
+            log("[jupytext] Warning: Notebook is not trusted")
+        return content
+
     # Just acting on metadata / pipe => save in place
     save_in_place = not nb_dest and not args.sync
     if save_in_place:
@@ -555,7 +617,8 @@ def jupytext_single_file(nb_file, args, log):
 
     timestamp_checker = TimestampChecker(pre_commit_mode=args.pre_commit_mode)
     timestamp_checker.get_and_check_timestamp(nb_file)
-    notebook = read(nb_file, fmt=fmt, config=config)
+    notebook = _read(nb_file, fmt=fmt)
+
     if "extension" in fmt and "format_name" not in fmt:
         text_representation = notebook.metadata.get("jupytext", {}).get("text_representation", {})
         if text_representation.get("extension") == fmt["extension"]:
@@ -600,6 +663,8 @@ def jupytext_single_file(nb_file, args, log):
 
     # Read paired notebooks
     nb_files = [nb_file, nb_dest]
+    inputs_nb_file = None
+    outputs_nb_file = None
     if args.sync:
         # If we are also setting the formats, we take the information
         # from the --set-formats option
@@ -608,9 +673,18 @@ def jupytext_single_file(nb_file, args, log):
         else:
             formats = notebook_formats(notebook, config, nb_file, fallback_on_current_fmt=False)
         set_prefix_and_suffix(fmt, formats, nb_file)
+
         try:
             notebook, inputs_nb_file, outputs_nb_file = load_paired_notebook(
-                notebook, fmt, config, formats, nb_file, log, args.pre_commit_mode, timestamp_checker
+                notebook,
+                fmt,
+                config,
+                formats,
+                nb_file,
+                log,
+                args.pre_commit_mode,
+                timestamp_checker,
+                read_func=_read,
             )
             nb_files = [inputs_nb_file, outputs_nb_file]
         except NotAPairedNotebook as err:
@@ -704,9 +778,7 @@ def jupytext_single_file(nb_file, args, log):
             resources = {}
 
         try:
-            from nbconvert.preprocessors import ExecutePreprocessor
-
-            exec_proc = ExecutePreprocessor(timeout=None, kernel_name=kernel_name)
+            exec_proc = execute_preprocessor(show_output=args.show_output, timeout=None, kernel_name=kernel_name)
             exec_proc.preprocess(notebook, resources=resources)
         except (ImportError, RuntimeError) as err:
             if args.pre_commit_mode:
@@ -746,8 +818,8 @@ def jupytext_single_file(nb_file, args, log):
 
                 # If the destination is not ipynb, we convert to/back that format
                 if dest_fmt["extension"] != ".ipynb":
-                    dest_text = writes(notebook, fmt=dest_fmt)
-                    notebook = reads(dest_text, fmt=dest_fmt)
+                    dest_text = writes(notebook, fmt=dest_fmt, config=config)
+                    notebook = reads(dest_text, fmt=dest_fmt, config=config)
 
                 text = writes(notebook, fmt=fmt, config=config)
 
@@ -786,7 +858,7 @@ def jupytext_single_file(nb_file, args, log):
             _callback_on_lazy_write(path)
         if path == "-":
             timestamp_checker.check_all_timestamps()
-            write(notebook, "-", fmt=fmt)
+            write(notebook, "-", fmt=fmt, config=config)
             return
 
         nonlocal untracked_files
@@ -796,7 +868,7 @@ def jupytext_single_file(nb_file, args, log):
             _, ext = os.path.splitext(path)
             fmt = copy(fmt or {})
             fmt = long_form_one_format(fmt, update={"extension": ext})
-            new_content = writes(notebook, fmt=fmt, config=config)
+            new_content = _writes(notebook, fmt=fmt)
             diff = None
             if not new_content.endswith("\n"):
                 new_content += "\n"
@@ -814,6 +886,16 @@ def jupytext_single_file(nb_file, args, log):
                 timestamp_checker.check_timestamp(path)
 
                 modified = new_content != current_content
+                # Preserve the Python source when serialization only adds a final newline.
+                if (
+                    modified
+                    and path == inputs_nb_file
+                    and not nb_dest
+                    and not args.pipe
+                    and ext == ".py"
+                    and _only_adds_final_newline(current_content, new_content)
+                ):
+                    modified = False
                 if modified and args.show_changes:
                     diff = compare(
                         new_content,
@@ -826,7 +908,7 @@ def jupytext_single_file(nb_file, args, log):
         tmp_path = path
         if modified:
             # The text representation of the notebook has changed, we write it on disk
-            create_prefix_dir(path, fmt)
+            create_prefix_dir(path, fmt, log)
             # Create a temporary file in the same directory as path. Later on we will move
             # that temporary file back to path (os.replace is atomic on most OS)
             name, ext = os.path.splitext(path)
@@ -1079,7 +1161,7 @@ def git_timestamp(path):
     return get_timestamp(path)
 
 
-def get_timestamp(path: str) -> Optional[float]:
+def get_timestamp(path: str) -> float | None:
     if not os.path.isfile(path):
         return None
     return os.stat(path).st_mtime
@@ -1098,9 +1180,9 @@ class TimestampChecker:
 
     def __init__(self, pre_commit_mode: bool = False):
         self.pre_commit_mode = pre_commit_mode
-        self._timestamps: dict[str, Optional[float]] = {}
+        self._timestamps: dict[str, float | None] = {}
 
-    def get_and_check_timestamp(self, path: str) -> Optional[float]:
+    def get_and_check_timestamp(self, path: str) -> float | None:
         if path in self._timestamps:
             ts = self.check_timestamp(path)
         else:
@@ -1112,7 +1194,7 @@ class TimestampChecker:
 
         return ts
 
-    def check_timestamp(self, path: str) -> Optional[float]:
+    def check_timestamp(self, path: str) -> float | None:
         if path not in self._timestamps:
             raise ValueError(
                 f"The timestamp of {shlex.quote(path)} was not previously recorded. So far Jupytext has only recorded timestamps for {', '.join(shlex.quote(p) for p in self._timestamps)}"
@@ -1139,7 +1221,7 @@ class TimestampChecker:
         for path in self._timestamps:
             self.check_timestamp(path)
 
-    def check_file_is_newest(self, path: str) -> Optional[float]:
+    def check_file_is_newest(self, path: str) -> float | None:
         """Check that the given file is the most recent among all files whose timestamp
         was recorded by this TimestampChecker. Return its timestamp."""
         ts = self._timestamps[path]
@@ -1157,8 +1239,20 @@ class TimestampChecker:
 _callback_on_lazy_write = None
 
 
+def _only_adds_final_newline(original: str, serialized: str) -> bool:
+    return not original.endswith("\n") and serialized == original + "\n"
+
+
 def load_paired_notebook(
-    notebook, fmt, config, formats, nb_file, log, pre_commit_mode: bool, timestamp_checker: TimestampChecker
+    notebook,
+    fmt,
+    config,
+    formats,
+    nb_file,
+    log,
+    pre_commit_mode: bool,
+    timestamp_checker: TimestampChecker,
+    read_func,
 ):
     """Update the notebook with the inputs and outputs of the most recent paired files"""
     if not formats:
@@ -1174,7 +1268,7 @@ def load_paired_notebook(
 
         log(f"[jupytext] Loading {shlex.quote(path)}")
         timestamp_checker.get_and_check_timestamp(path)
-        return read(path, fmt=fmt, config=config)
+        return read_func(path, fmt=fmt)
 
     if pre_commit_mode and file_in_git_index(nb_file):
         # We raise an error if two representations of this notebook in the git index are inconsistent
@@ -1192,7 +1286,7 @@ def load_paired_notebook(
                 timestamp_checker.get_and_check_timestamp(alt_path)
                 nb = read(alt_path, fmt=alt_fmt, config=config)
                 alt_text = writes(nb, fmt=fmt0, config=config)
-                if alt_text != text0:
+                if alt_text != text0 and not (fmt0["extension"] == ".py" and _only_adds_final_newline(text0, alt_text)):
                     diff = compare(alt_text, text0, alt_path, path0, return_diff=True)
                     raise InconsistentVersions(
                         f"{shlex.quote(alt_path)} and {shlex.quote(path0)} are inconsistent.\n"

@@ -12,7 +12,8 @@ import nbformat
 import pytest
 from jupyter_client.kernelspec import find_kernel_specs, get_kernel_spec
 from jupyter_server.utils import ensure_async
-from nbformat.v4.nbbase import new_code_cell, new_markdown_cell, new_notebook
+from nbformat.sign import NotebookNotary
+from nbformat.v4.nbbase import new_code_cell, new_markdown_cell, new_notebook, new_raw_cell
 
 from jupytext import __version__, read, reads, write, writes
 from jupytext.cli import jupytext, parse_jupytext_args, str2bool, system
@@ -21,6 +22,72 @@ from jupytext.formats import JupytextFormatError, long_form_one_format
 from jupytext.myst import is_myst_available
 from jupytext.paired_paths import InconsistentPath, paired_paths
 from jupytext.pandoc import is_pandoc_available
+
+
+@pytest.mark.parametrize("repeat", range(2))
+def test_cli_uses_fresh_notary(tmp_path, fresh_notary, repeat):
+    """Trust survives CLI calls within a test, but not between tests."""
+    notebook = new_notebook(cells=[new_code_cell("1 + 1")])
+    path = tmp_path / "notebook.ipynb"
+    write(notebook, path)
+    assert not fresh_notary.check_signature(notebook)
+
+    for _ in range(2):
+        jupytext([str(path), "--to", "ipynb"])
+        assert fresh_notary.check_signature(read(path))
+
+
+def test_cli_subprocess_uses_isolated_trust(tmp_path):
+    notebook = new_notebook(cells=[new_code_cell("1 + 1")])
+    path = tmp_path / "notebook.ipynb"
+    write(notebook, path)
+    check_call([sys.executable, "-m", "jupytext", str(path), "--to", "ipynb"])
+
+    notary = NotebookNotary(data_dir=os.environ["JUPYTER_DATA_DIR"])
+    try:
+        assert notary.check_signature(read(path))
+        assert notary.db_file == str(tmp_path / "jupyter" / "nbsignatures.db")
+    finally:
+        notary.store.close()
+
+
+@pytest.mark.requires_user_kernel_python3
+def test_cli_subprocess_can_execute_with_user_kernel(tmp_path):
+    notebook = new_notebook(
+        cells=[new_code_cell("1 + 1")],
+        metadata={"kernelspec": {"name": "python_kernel", "display_name": "Python", "language": "python"}},
+    )
+    path = tmp_path / "notebook.ipynb"
+    write(notebook, path)
+    check_call([sys.executable, "-m", "jupytext", str(path), "--execute", "--to", "ipynb"])
+    assert read(path).cells[0].outputs[0].data["text/plain"] == "2"
+
+
+@pytest.mark.requires_myst
+@pytest.mark.parametrize("args", [["--sync"], ["--from", "md:myst", "--to", "ipynb", "--update"]])
+@pytest.mark.parametrize("tags", [["edited"], []])
+def test_cli_preserves_metadata_edits_to_explicit_myst_raw_cell(tmp_path, args, tags):
+    source = "---\n- first\n- second\n---"
+    notebook = new_notebook(
+        cells=[new_raw_cell(source, metadata={"tags": ["old"]})],
+        metadata={"jupytext": {"formats": "ipynb,md:myst"}},
+    )
+    ipynb_path = tmp_path / "notebook.ipynb"
+    md_path = tmp_path / "notebook.md"
+    write(notebook, ipynb_path)
+    md_path.write_text(
+        "---\njupyter:\n  jupytext:\n    formats: ipynb,md:myst\n---\n\n"
+        "```{raw-cell}\n" + (":tags: [edited]\n" if tags else "\n") + source + "\n```\n",
+        encoding="utf-8",
+    )
+    timestamp = md_path.stat().st_mtime - 2
+    os.utime(ipynb_path, (timestamp, timestamp))
+
+    jupytext([*args, str(md_path)])
+
+    cell = read(ipynb_path).cells[0]
+    assert cell.source == source
+    assert cell.metadata == ({"tags": tags} if tags else {})
 
 
 def test_str2bool():
@@ -519,6 +586,42 @@ def test_sync(ipynb_py_file, tmpdir, cwd_tmpdir, capsys):
 
     # ipynb must be older than py file, otherwise our Contents Manager will complain
     assert os.path.getmtime(tmp_ipynb) <= os.path.getmtime(tmp_py)
+
+
+@pytest.mark.parametrize("source_is_python", [True, False])
+def test_sync_python_notebook_without_final_newline(tmp_path, source_is_python):
+    (tmp_path / "jupytext.toml").write_text('formats = "ipynb,py:percent"\nnotebook_metadata_filter = "-all"\n')
+    script = tmp_path / "notebook.py"
+    notebook = tmp_path / "notebook.ipynb"
+    script_content = b"# %%\nprint(2)"
+    script.write_bytes(script_content)
+    write(new_notebook(cells=[new_code_cell("print(1)")]), notebook)
+
+    older, newer = (notebook, script) if source_is_python else (script, notebook)
+    os.utime(older, (newer.stat().st_mtime - 2,) * 2)
+
+    assert jupytext(["--sync", str(script)]) == 0
+    if source_is_python:
+        assert script.read_bytes() == script_content
+        assert read(notebook).cells[0].source == "print(2)"
+        assert script.stat().st_mtime >= notebook.stat().st_mtime
+    else:
+        assert script.read_text() == "# %%\nprint(1)\n"
+
+
+def test_pre_commit_sync_accepts_python_notebook_without_final_newline(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    system("git", "init", "-q")
+    (tmp_path / "jupytext.toml").write_text('formats = "ipynb,py:percent"\nnotebook_metadata_filter = "-all"\n')
+    script = tmp_path / "notebook.py"
+    notebook = tmp_path / "notebook.ipynb"
+    script_content = b"# %%\nprint(1)"
+    script.write_bytes(script_content)
+    write(new_notebook(cells=[new_code_cell("print(1)")]), notebook)
+    system("git", "add", str(script), str(notebook))
+
+    assert jupytext(["--sync", "--pre-commit-mode", str(script)]) == 0
+    assert script.read_bytes() == script_content
 
 
 @pytest.mark.requires_pandoc
@@ -1364,6 +1467,25 @@ def test_pipe_with_quiet_does_not_print(tmp_path, capsys):
     assert captured.err == ""
 
     assert tmp_py.read_text() == "# %%\n1 + 1\n"
+
+
+def test_quiet_does_not_print_when_creating_missing_directory(tmp_path, monkeypatch, capsys):
+    """In quiet mode, jupytext should not print a warning when creating a missing directory (#1285)"""
+    monkeypatch.chdir(tmp_path)
+    tmp_py = tmp_path / "script.py"
+    tmp_py.write_text("# %%\n1+1\n")
+
+    output_dir = tmp_path / "jupyter_execute"
+    assert not output_dir.exists()
+
+    # The double slash in './jupyter_execute//ipynb' is the jupytext syntax for a prefix directory
+    jupytext(["--quiet", "script.py", "--to", "./jupyter_execute//ipynb"])
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+    assert output_dir.exists()
+    assert (output_dir / "script.ipynb").exists()
 
 
 def test_update_formats_1386(python_notebook, tmp_path, capsys):

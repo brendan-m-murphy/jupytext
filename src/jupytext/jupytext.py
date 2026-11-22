@@ -40,6 +40,7 @@ from .languages import (
 )
 from .metadata_filter import filter_metadata, update_metadata_filters
 from .myst import MYST_FORMAT_NAME, myst_extensions, myst_to_notebook, notebook_to_myst
+from .org import notebook_to_org, org_to_notebook
 from .pandoc import md_to_notebook, notebook_to_md
 from .pep8 import pep8_lines_between_cells
 from .quarto import notebook_to_qmd, qmd_to_notebook
@@ -59,6 +60,11 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
         self.config = config
         self.ext = self.fmt["extension"]
         self.implementation = get_format_implementation(self.ext, self.fmt.get("format_name"))
+        self.cell_id_to_title = (
+            self.implementation.format_name in ("light", "percent", "hydrogen")
+            and config is not None
+            and config.cell_id_to_title
+        )
 
     def update_fmt_with_notebook_options(self, metadata, read=False):
         """Update format options with the values in the notebook metadata, and record those
@@ -100,6 +106,9 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
         if self.fmt.get("format_name") == "pandoc":
             return md_to_notebook(s)
 
+        if self.fmt.get("format_name") == "org" or self.ext == ".org":
+            return org_to_notebook(s)
+
         if self.fmt.get("format_name") == "quarto":
             return qmd_to_notebook(s)
 
@@ -113,6 +122,7 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
         lines = s.splitlines()
 
         cells = []
+        explicit_cell_ids = set()
         metadata, jupyter_md, header_cell, pos = header_to_metadata_and_cell(
             lines,
             self.implementation.header_prefix,
@@ -122,6 +132,7 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
                 "root_level_metadata_as_raw_cell",
                 (self.config.root_level_metadata_as_raw_cell if self.config is not None else True),
             ),
+            explicit_cell_ids=explicit_cell_ids if self.cell_id_to_title else None,
         )
         default_language = default_language_from_metadata_and_ext(metadata, self.implementation.extension)
         self.update_fmt_with_notebook_options(metadata, read=True)
@@ -135,10 +146,16 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
             cells.append(new_code_cell(source="%matplotlib inline"))
 
         cell_metadata_json = False
+        cell_fmt = {**self.fmt, "cell_id_to_title": self.cell_id_to_title}
 
         while lines:
-            reader = self.implementation.cell_reader_class(self.fmt, default_language)
+            reader = self.implementation.cell_reader_class(cell_fmt, default_language)
             cell, pos = reader.read(lines)
+            if reader.cell_id is not None:
+                if reader.cell_id in explicit_cell_ids:
+                    raise ValueError(f"Duplicate cell ID {reader.cell_id!r} in the script")
+                cell.id = reader.cell_id
+                explicit_cell_ids.add(cell.id)
             cells.append(cell)
             cell_metadata_json = cell_metadata_json or reader.cell_metadata_json
             if pos <= 0:
@@ -146,7 +163,8 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
             lines = lines[pos:]
 
         custom_cell_magics = self.fmt.get("custom_cell_magics", "").split(",")
-        set_main_and_cell_language(metadata, cells, self.implementation.extension, custom_cell_magics)
+        custom_language_magics = self.fmt.get("custom_language_magics", "").split(",")
+        set_main_and_cell_language(metadata, cells, self.implementation.extension, custom_cell_magics + custom_language_magics)
         cell_metadata = set()
         for cell in cells:
             cell_metadata.update(cell.metadata.keys())
@@ -169,7 +187,12 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
                 filtered_cells.append(cell)
             cells = filtered_cells
 
-        return new_notebook(cells=cells, metadata=metadata)
+        notebook = new_notebook(cells=cells, metadata=metadata)
+        if explicit_cell_ids:
+            # Keep pairing state in the instance dictionary. NotebookNode's attribute
+            # access can resolve keys from the serialized notebook.
+            vars(notebook)["_cell_ids_from_text"] = frozenset(explicit_cell_ids)
+        return notebook
 
     def filter_notebook(self, nb, metadata, preserve_cell_ids=True):
         self.update_fmt_with_notebook_options(nb.metadata)
@@ -213,6 +236,8 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
         """Return the text representation of the notebook"""
         if self.fmt.get("format_name") == "pandoc":
             return notebook_to_md(self.filter_notebook(nb, metadata))
+        if self.fmt.get("format_name") == "org" or self.ext == ".org":
+            return notebook_to_org(self.filter_notebook(nb, metadata))
         if self.fmt.get("format_name") == "quarto" or self.ext == ".qmd":
             return notebook_to_qmd(self.filter_notebook(nb, metadata))
         if self.fmt.get("format_name") == "marimo":
@@ -250,6 +275,7 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
             self.implementation,
             self.fmt,
             unsupported_keys=unsupported_keys,
+            preserve_raw_cell_id=self.cell_id_to_title,
         )
         header.extend(header_content)
 
@@ -258,6 +284,7 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
             "sphinx"
         )
         split_at_heading = self.fmt.get("split_at_heading", False)
+        cell_fmt = {**self.fmt, "cell_id_to_title": self.cell_id_to_title}
 
         for cell in nb.cells:
             if looking_for_first_markdown_cell and cell.cell_type == "markdown":
@@ -265,7 +292,7 @@ class TextNotebookConverter(NotebookReader, NotebookWriter):
                 looking_for_first_markdown_cell = False
 
             cell_exporters.append(
-                self.implementation.cell_exporter_class(cell, default_language, self.fmt, unsupported_keys=unsupported_keys)
+                self.implementation.cell_exporter_class(cell, default_language, cell_fmt, unsupported_keys=unsupported_keys)
             )
 
         _warn_on_unsupported_keys(unsupported_keys)
@@ -408,7 +435,7 @@ def read(fp, as_version=nbformat.NO_CONVERT, fmt=None, config=None, **kwargs):
         # Update the input format by reference if missing
         if isinstance(fmt, dict) and not fmt:
             fmt.update(long_form_one_format(divine_format(text)))
-        return reads(text, fmt)
+        return reads(text, fmt or None, as_version=as_version, config=config, **kwargs)
 
     if not hasattr(fp, "read"):
         # Treat fp as a file name
@@ -529,34 +556,39 @@ def write(nb, fp, version=nbformat.NO_CONVERT, fmt=None, config=None, **kwargs):
             sys.stdout.write(content.encode("utf-8"))
         return
 
-    if not hasattr(fp, "write"):
-        # Treat fp as a file name
-        fp = str(fp)
-        _, ext = os.path.splitext(fp)
+    is_path = not hasattr(fp, "write")
+    if is_path:
+        path = str(fp)
+        _, ext = os.path.splitext(path)
         fmt = copy(fmt or {})
         fmt = long_form_one_format(fmt, update={"extension": ext})
-        create_prefix_dir(fp, fmt)
-
-        with open(fp, "w", encoding="utf-8") as stream:
-            write(nb, stream, version=version, fmt=fmt, config=config, **kwargs)
-            return
     else:
         assert fmt is not None, "'fmt' argument in jupytext.write is mandatory unless fp is a file name"
 
     content = writes(nb, version=version, fmt=fmt, config=config, **kwargs)
     if isinstance(content, bytes):
         content = content.decode("utf8")
-    fp.write(content)
     if not content.endswith("\n"):
-        fp.write("\n")
+        content += "\n"
+
+    if is_path:
+        # Conversion can fail, so open the destination only after serialization.
+        create_prefix_dir(path, fmt, None)
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(content)
+    else:
+        fp.write(content)
 
 
-def create_prefix_dir(nb_file, fmt):
+def create_prefix_dir(nb_file, fmt, log):
     """Create directory if fmt has a prefix"""
     if "prefix" in fmt:
         nb_dir = os.path.dirname(nb_file) + os.path.sep
         if not os.path.isdir(nb_dir):
-            logging.log(logging.WARNING, "[jupytext] creating missing directory %s", nb_dir)
+            if log is not None:
+                log(f"[jupytext] creating missing directory {nb_dir}")
+            else:
+                logging.log(logging.WARNING, "[jupytext] creating missing directory %s", nb_dir)
             os.makedirs(nb_dir)
 
 

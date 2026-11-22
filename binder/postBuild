@@ -1,5 +1,11 @@
+#!/bin/bash
+
 # Stop everything if one command fails
 set -e
+
+# Default image of the Binder has outdated JupyterLab and notebooks
+# We need to upgrade them before installing jupytext
+pip install -U jupyterlab notebook
 
 # Install from sources
 # NB: If you want to use Jupytext on your binder, don't install it from source,
@@ -16,8 +22,11 @@ jupytext demo/get_started.md --to ipynb --update-metadata '{"jupytext":null}'
 # (the demo starts with just the ipynb file)
 rm demo/get_started.md
 
-# Trust our World Population notebook
-jupyter trust demo/World\ population.ipynb
+# Prepare the cell-ID notebook while keeping the script and its configuration.
+jupytext --sync demo/cell_ids/notebook.py
+
+# Trust the saved chart outputs.
+jupyter trust "demo/World population.ipynb" demo/vscode/notebook.ipynb
 
 # Install the bash kernel
 python -m bash_kernel.install
